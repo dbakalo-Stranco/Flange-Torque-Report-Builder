@@ -5,8 +5,7 @@ import traceback
 
 from fastapi import FastAPI, UploadFile, File, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import StreamingResponse, JSONResponse, FileResponse
-from fastapi.staticfiles import StaticFiles
+from fastapi.responses import StreamingResponse, FileResponse
 
 from extract import extract_tags_from_image
 from qc_rules import DEFAULT_QC
@@ -21,7 +20,7 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-STATIC_DIR = os.path.join(os.path.dirname(__file__), "..", "static")
+APP_DIR = os.path.dirname(os.path.abspath(__file__))
 
 PDF_MAX_PAGES = 6
 
@@ -102,4 +101,11 @@ def health():
     return {"ok": True}
 
 
-app.mount("/", StaticFiles(directory=STATIC_DIR, html=True), name="static")
+@app.get("/")
+def index():
+    return FileResponse(os.path.join(APP_DIR, "index.html"))
+
+
+@app.get("/app.js")
+def app_js():
+    return FileResponse(os.path.join(APP_DIR, "app.js"), media_type="application/javascript")
