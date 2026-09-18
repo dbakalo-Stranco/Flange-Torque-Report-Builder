@@ -126,17 +126,28 @@
     <div class="btn-row">
       <button class="btn" id="genPdfBtn" disabled>Generate PDF Report</button>
       <button class="btn ghost small" id="genXlsxBtn" disabled>Download Excel</button>
+      <button class="btn ghost small" id="genLogBtn" disabled>Download Corrections Log</button>
       <button class="btn danger small" id="clearReportsBtn" disabled>Clear all</button>
     </div>
     <div class="status-line" id="genStatus" hidden><span class="spinner"></span><span>Building report...</span></div>
   </div>
 
   <div class="panel">
-    <h2>QC Standards <span style="font-weight:400;font-size:12px;color:var(--sub)">(auto-checked against every tag)</span></h2>
+    <h2>QC Standards <span style="font-weight:400;font-size:12px;color:var(--sub)">(auto-checked against every tag -- bolt size &amp; torque always get forced to these, tag value is only logged as a note if it disagrees)</span></h2>
     <div id="qcTable"></div>
     <div class="btn-row">
       <button class="btn small" id="addQcRow">+ Add size</button>
       <button class="btn ghost small" id="resetQc">Reset to company defaults</button>
+    </div>
+  </div>
+
+  <div class="panel">
+    <h2>Tools &amp; Calibration <span style="font-weight:400;font-size:12px;color:var(--sub)">(known tool certs -- routes each tag's tool to the right "Tools Required" row + cal date)</span></h2>
+    <p class="hint">Add a tool here once (serial, model, capacity, calibration date) and every tag using that serial is placed on the matching row automatically. A tool not in this list gets flagged on the tag instead of guessed.</p>
+    <div id="toolsTable"></div>
+    <div class="btn-row">
+      <button class="btn small" id="addToolRow">+ Add tool</button>
+      <button class="btn ghost small" id="resetTools">Reset to known tools</button>
     </div>
   </div>
 

@@ -11,6 +11,7 @@ const DEFAULT_JOB = {
 
 let job = load('flange_job', DEFAULT_JOB);
 let qc = load('flange_qc', null); // filled from server on first load
+let tools = load('flange_tools', null); // filled from server on first load
 let pendingFiles = [];
 let reports = load('flange_reports', []);
 let lastExtracted = [];
@@ -90,6 +91,62 @@ $('resetQc').addEventListener('click', async () => {
   renderQc();
 });
 
+// ---------- Tools table (capacity/row + cal date, by serial) ----------
+function findTool(serial) {
+  const norm = s => String(s || '').trim().toUpperCase().replace(/\s+/g, '');
+  const target = norm(serial);
+  if (!target) return null;
+  return tools.find(t => norm(t.serial) === target) || null;
+}
+const ROW_LABELS = {
+  32: 'TORQUE PUMP', 33: '250LB CLICKER', 34: '600LB CLICKER', 35: 'W2000',
+  36: 'W4000', 37: 'W8000', 38: 'S3000', 39: '80LB CLICKER / B-RAD JGUN',
+  40: 'OPEN ROW (custom label)',
+};
+function renderTools() {
+  let rows = tools.map((t, i) => `
+    <tr>
+      <td><input value="${t.serial}" data-i="${i}" data-f="serial"></td>
+      <td><input value="${t.model || ''}" data-i="${i}" data-f="model"></td>
+      <td><input value="${t.capacity || ''}" data-i="${i}" data-f="capacity" style="width:70px"></td>
+      <td><select data-i="${i}" data-f="row">
+        ${Object.entries(ROW_LABELS).map(([r, label]) => `<option value="${r}" ${Number(t.row) === Number(r) ? 'selected' : ''}>${label}</option>`).join('')}
+      </select></td>
+      <td><input value="${t.cal || ''}" data-i="${i}" data-f="cal" style="width:100px" placeholder="m/d/yyyy"></td>
+      <td class="qc-row-actions"><button class="btn danger small" data-deltool="${i}">&times;</button></td>
+    </tr>`).join('');
+  $('toolsTable').innerHTML = `
+    <table><thead><tr>
+      <th>Serial #</th><th>Model</th><th>Capacity (ft-lb)</th><th>Tools Required row</th><th>Cal. Date</th><th></th>
+    </tr></thead><tbody>${rows}</tbody></table>`;
+  $('toolsTable').querySelectorAll('input, select').forEach(inp => {
+    const ev = inp.tagName === 'SELECT' ? 'change' : 'change';
+    inp.addEventListener(ev, () => {
+      const i = +inp.dataset.i, f = inp.dataset.f;
+      tools[i][f] = f === 'row' ? Number(inp.value) : (f === 'capacity' ? Number(inp.value) : inp.value);
+      save('flange_tools', tools);
+    });
+  });
+  $('toolsTable').querySelectorAll('[data-deltool]').forEach(btn => {
+    btn.addEventListener('click', () => {
+      tools.splice(+btn.dataset.deltool, 1);
+      save('flange_tools', tools);
+      renderTools();
+    });
+  });
+}
+$('addToolRow').addEventListener('click', () => {
+  tools.push({serial:'', model:'', capacity:'', row:39, cal:''});
+  save('flange_tools', tools);
+  renderTools();
+});
+$('resetTools').addEventListener('click', async () => {
+  const r = await fetch('/api/tool-defaults').then(r => r.json());
+  tools = r.tools;
+  save('flange_tools', tools);
+  renderTools();
+});
+
 // ---------- Upload / extract ----------
 $('dropzone').addEventListener('click', (e) => { /* native label->input */ });
 $('fileInput').addEventListener('change', (e) => addFiles(e.target.files));
@@ -165,14 +222,15 @@ function computeDerived(d) {
   const pid = d.line ? `${d.drawing} / ${d.line}` : (d.drawing || '');
   const flangeNo = `FL#${d.flangeNo || ''}`;
   const rule = findQcRow(d.flangeSize, d.flangeClass);
-  return { pid, flangeNo, rule };
+  const tool = findTool(d.toolSerial);
+  return { pid, flangeNo, rule, tool };
 }
 
 function renderReview(list) {
   const box = $('reviewList');
   box.innerHTML = '';
   list.forEach((d, idx) => {
-    const { pid, flangeNo, rule } = computeDerived(d);
+    const { pid, flangeNo, rule, tool } = computeDerived(d);
     const uncertain = new Set(d.uncertain || []);
     const mismatches = [];
     if (rule) {
@@ -181,6 +239,7 @@ function renderReview(list) {
       const t = parseFloat(d.finalTorque);
       if (!isNaN(t) && (t < rule.tMin - 0.5 || t > rule.tMax + 0.5)) mismatches.push('finalTorque');
     }
+    if (d.toolSerial && !tool) mismatches.push('toolSerial');
     const card = document.createElement('div');
     card.className = 'review-card';
     card.innerHTML = `
@@ -196,11 +255,11 @@ function renderReview(list) {
         ${field('Gasket', 'gasket', d.gasket, idx)}
         ${field('Lubricant Type', 'lubricantType', d.lubricantType, idx)}
         ${field('Insul. Kit (Yes/No/N-A)', 'insulKit', d.insulKit, idx)}
-        ${field('Tool Serial', 'toolSerial', d.toolSerial, idx)}
+        ${field('Tool Serial', 'toolSerial', d.toolSerial, idx, mismatches.includes('toolSerial'))}
         ${field('Technician', 'technician', d.technician, idx)}
         ${field('Date', 'technicianDate', d.technicianDate, idx)}
       </div>
-      ${(uncertain.size || !rule) ? `<div class="note">${!rule ? '⚠ No matching QC standard for this size/class &mdash; add one below, or double-check bolt size/torque by hand. ' : ''}${uncertain.size ? '⚠ Flagged by the reader as uncertain: ' + [...uncertain].join(', ') : ''}</div>` : ''}
+      ${(uncertain.size || !rule || mismatches.includes('toolSerial')) ? `<div class="note">${!rule ? '⚠ No matching QC standard for this size/class &mdash; add one below, or double-check bolt size/torque by hand. ' : ''}${mismatches.includes('toolSerial') ? '⚠ Tool serial not found in the Tools list below &mdash; no known capacity/cal date, add it or verify the serial. ' : ''}${uncertain.size ? '⚠ Flagged by the reader as uncertain: ' + [...uncertain].join(', ') : ''}</div>` : ''}
       <div class="btn-row">
         <button class="btn small" data-add="${idx}">Add to Report</button>
       </div>`;
@@ -213,6 +272,7 @@ function renderReview(list) {
       const get = f => card.querySelector(`[data-field="${f}"]`).value;
       const d = list[idx];
       const rule = findQcRow(get('flangeSize'), get('flangeClass'));
+      const tool = findTool(get('toolSerial'));
       const entry = buildEntry({
         pid: get('pid'), flangeNoDisp: get('flangeNoDisp'), tag: d.tag,
         flangeSize: get('flangeSize'), flangeClass: get('flangeClass'),
@@ -221,7 +281,7 @@ function renderReview(list) {
         lubricantType: get('lubricantType'), toolSerial: get('toolSerial'),
         technician: get('technician'), technicianDate: get('technicianDate'),
         insulKit: get('insulKit'), uncertain: d.uncertain,
-      }, rule);
+      }, rule, tool);
       reports.push(entry);
       save('flange_reports', reports);
       renderReports();
@@ -238,13 +298,46 @@ function escapeHtml(s) {
   return String(s == null ? '' : s).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 }
 
-function buildEntry(fields, rule) {
-  const torque = parseFloat(fields.finalTorque) || (rule ? rule.tMax : 0);
+function buildEntry(fields, rule, tool) {
+  // Company standard always wins over what the tag says -- bolt size and
+  // final torque get forced to the QC table's value when a rule matches,
+  // and the override gets logged (for the corrections log, never onto the
+  // report itself) so it can be checked against the physical tag.
+  const comments = [];
+  const normBolt = s => String(s || '').replace(/["\s]/g, '');
+  let boltOd = fields.boltSize;
+  let torque;
+  if (rule) {
+    if (normBolt(fields.boltSize) !== normBolt(rule.boltOD)) {
+      comments.push(`Bolt size overridden to standard ${rule.boltOD}" per company QC rule for ${rule.size}-${rule.cls}# flanges - tag showed ${fields.boltSize || '(blank)'}", verify.`);
+    }
+    boltOd = rule.boltOD;
+    const tagTorque = parseFloat(fields.finalTorque);
+    torque = rule.tMax;
+    if (!isNaN(tagTorque) && (tagTorque < rule.tMin - 0.5 || tagTorque > rule.tMax + 0.5)) {
+      comments.push(`Final torque overridden to standard ${rule.tMax} ft-lb per company QC rule for ${rule.size}-${rule.cls}# flanges - tag showed ${fields.finalTorque}, verify.`);
+    }
+  } else {
+    torque = parseFloat(fields.finalTorque) || 0;
+    comments.push('No matching QC standard on file for this size/class -- verify bolt size and torque by hand.');
+  }
   const ratios = rule ? rule.ratios : [0.33, 0.67, 1, 1];
   const stages = ratios.map(r => Math.round(torque * r));
   const boltCount = rule ? rule.boltCount : 8;
-  const comments = [];
-  if (!rule) comments.push('No matching QC standard on file for this size/class -- verify bolt size and torque by hand.');
+
+  // Tool row placement -- route to this tool's capacity row per its cert
+  // on file; flag (don't guess) when the serial isn't recognized.
+  let toolRow = 39, toolCal = '', toolLabel = '';
+  if (fields.toolSerial) {
+    if (tool) {
+      toolRow = tool.row;
+      toolCal = tool.cal || '';
+      if (tool.row === 40) toolLabel = `${tool.capacity || ''}LB CLICKER`.trim();
+    } else {
+      comments.push(`Tool serial "${fields.toolSerial}" not found in the Tools list -- no known capacity or calibration date on file, verify against the tool's cert.`);
+    }
+  }
+
   if ((fields.uncertain || []).length) comments.push('Reader flagged as uncertain: ' + fields.uncertain.join(', ') + ' -- verify against the original tag.');
   return {
     tab: fields.tag || ('T' + Date.now()),
@@ -254,13 +347,14 @@ function buildEntry(fields, rule) {
     date: fields.technicianDate || '',
     size: fields.flangeSize,
     cls: fields.flangeClass,
-    bolt_od: (rule ? rule.boltOD : fields.boltSize),
+    bolt_od: boltOd,
     boltcount: boltCount,
     torqued_by: fields.technician || '',
     stages: stages,
-    tool_label: 'OTHER',
+    tool_label: toolLabel,
     tool_serial: fields.toolSerial || '',
-    tool_cal: '',
+    tool_cal: toolCal,
+    tool_row: toolRow,
     system: job.system || 'PH02',
     gasket: fields.gasket || '',
     lubricant_type: fields.lubricantType || '',
@@ -292,13 +386,14 @@ function renderManualForm() {
   $('manualAdd').addEventListener('click', () => {
     const v = id => $(id).value;
     const rule = findQcRow(v('mSize'), v('mClass'));
+    const tool = findTool(v('mTool'));
     const entry = buildEntry({
       pid: v('mPid'), flangeNoDisp: `FL#${v('mFlangeNo')}`, tag: v('mTag'),
       flangeSize: v('mSize'), flangeClass: v('mClass'), boltSize: v('mBoltSize'),
       finalTorque: v('mTorque'), gasket: v('mGasket'), lubricantType: v('mLube'),
       toolSerial: v('mTool'), technician: v('mBy'), technicianDate: v('mDate'),
       uncertain: [],
-    }, rule);
+    }, rule, tool);
     reports.push(entry);
     save('flange_reports', reports);
     renderReports();
@@ -318,7 +413,7 @@ function renderReports() {
   } else {
     box.innerHTML = reports.map((r, i) => `
       <div class="r">
-        <div class="meta"><b>${escapeHtml(r.tag)} &mdash; ${escapeHtml(r.pid)} ${escapeHtml(r.flange_no)}</b>
+        <div class="meta"><b>${escapeHtml(r.tag)} &mdash; ${escapeHtml(r.pid)} ${escapeHtml(r.flange_no)}</b>${r.comment ? ' <span title="' + escapeHtml(r.comment) + '">⚠</span>' : ''}
         <span>${escapeHtml(r.size)}" ${escapeHtml(String(r.cls))} &middot; ${escapeHtml(r.bolt_od)} bolt &middot; ${r.stages[3]} ft-lb</span></div>
         <button class="btn ghost small" data-rm="${i}">Remove</button>
       </div>`).join('');
@@ -334,6 +429,9 @@ function renderReports() {
   $('genPdfBtn').disabled = !has;
   $('genXlsxBtn').disabled = !has;
   $('clearReportsBtn').disabled = !has;
+  const withNotes = reports.filter(r => r.comment).length;
+  $('genLogBtn').disabled = withNotes === 0;
+  $('genLogBtn').textContent = withNotes ? `Download Corrections Log (${withNotes})` : 'Download Corrections Log';
   const cb = $('reportCount');
   if (has) { cb.style.display = 'inline-block'; cb.textContent = `${reports.length} flange${reports.length>1?'s':''}`; }
   else cb.style.display = 'none';
@@ -373,6 +471,32 @@ async function generate(fmt) {
 $('genPdfBtn').addEventListener('click', () => generate('pdf'));
 $('genXlsxBtn').addEventListener('click', () => generate('xlsx'));
 
+async function downloadCorrectionsLog() {
+  $('genLogBtn').disabled = true;
+  try {
+    const res = await fetch('/api/corrections-log', {
+      method: 'POST', headers: {'Content-Type':'application/json'},
+      body: JSON.stringify({ entries: reports }),
+    });
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({detail: res.statusText}));
+      throw new Error(err.detail || 'Server error');
+    }
+    const blob = await res.blob();
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = 'Tag_Corrections_Log.xlsx';
+    document.body.appendChild(a); a.click(); a.remove();
+    URL.revokeObjectURL(url);
+  } catch (err) {
+    alert("Couldn't build the corrections log: " + err.message);
+  } finally {
+    renderReports();
+  }
+}
+$('genLogBtn').addEventListener('click', downloadCorrectionsLog);
+
 // ---------- Init ----------
 (async function init() {
   renderJob();
@@ -383,7 +507,15 @@ $('genXlsxBtn').addEventListener('click', () => generate('xlsx'));
     } catch (e) { qc = []; }
     save('flange_qc', qc);
   }
+  if (!tools) {
+    try {
+      const r = await fetch('/api/tool-defaults').then(r => r.json());
+      tools = r.tools;
+    } catch (e) { tools = []; }
+    save('flange_tools', tools);
+  }
   renderQc();
+  renderTools();
   renderManualForm();
   renderReports();
 })();

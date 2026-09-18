@@ -8,8 +8,9 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse, FileResponse
 
 from extract import extract_tags_from_image
-from qc_rules import DEFAULT_QC
+from qc_rules import DEFAULT_QC, DEFAULT_TOOLS
 from report_builder import build_workbook, workbook_to_bytes, xlsx_bytes_to_pdf_bytes
+from corrections_log import build_corrections_log
 
 app = FastAPI(title="Flange Torque Report Builder")
 
@@ -39,6 +40,11 @@ def _pdf_to_images(data: bytes):
 @app.get("/api/qc-defaults")
 def qc_defaults():
     return {"qc": DEFAULT_QC}
+
+
+@app.get("/api/tool-defaults")
+def tool_defaults():
+    return {"tools": DEFAULT_TOOLS}
 
 
 @app.post("/api/extract")
@@ -93,6 +99,25 @@ async def generate(payload: dict):
         io.BytesIO(pdf_bytes),
         media_type="application/pdf",
         headers={"Content-Disposition": "attachment; filename=Flange_Torque_Report.pdf"},
+    )
+
+
+@app.post("/api/corrections-log")
+async def corrections_log(payload: dict):
+    entries = payload.get("entries")
+    if not entries:
+        raise HTTPException(status_code=400, detail="No entries provided")
+    try:
+        xlsx_bytes, rows = build_corrections_log(entries)
+    except Exception as e:
+        traceback.print_exc()
+        raise HTTPException(status_code=400, detail=f"Could not build corrections log: {e}")
+    if rows == 0:
+        raise HTTPException(status_code=400, detail="No QC notes on any of these entries -- nothing to log")
+    return StreamingResponse(
+        io.BytesIO(xlsx_bytes),
+        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        headers={"Content-Disposition": "attachment; filename=Tag_Corrections_Log.xlsx"},
     )
 
 

@@ -83,3 +83,35 @@ tweak to the layout), the easiest path is to come back to Claude, describe
 the change, and get an updated copy of this project to re-upload to the
 same GitHub repo -- Render redeploys automatically within a minute or two
 of a new upload.
+
+## What's new (9/18/26 update)
+
+All the standing QC rules from the chat workflow are now built into the
+app itself:
+
+- **Tools & Calibration panel** (new, works just like the QC Standards
+  panel): add a tool once -- serial #, model, capacity, calibration date,
+  and which "Tools Required" row it belongs on (250LB CLICKER, 80LB
+  CLICKER, etc.) -- and every tag using that serial gets routed to the
+  right row and cal date automatically. A serial not in the list gets
+  flagged on the tag (never silently guessed) and noted in the
+  corrections log.
+- **QC standards now force the standard**, not just flag a mismatch: bolt
+  size and final torque always get set to your QC table's value for that
+  flange size/class. If the tag disagreed, that gets written down as a
+  note for the corrections log -- never onto the report itself.
+- **Corrections log**: a new "Download Corrections Log" button next to
+  the report buttons. It builds a spreadsheet listing every tag that had
+  something overridden or flagged (bolt size, torque, unknown tool,
+  anything the reader wasn't sure about) with what the tag showed, what
+  it was corrected to, and why -- so you can check it against the
+  physical tags. Nothing gets written into the Comments box on the
+  report anymore.
+- **Stranco Rep block is auto-filled** with Michael Bakalo's name and his
+  actual signature (not a font) on every report, dated to the tag. The
+  QA/QC Rep line is still left blank for a wet signature.
+
+To pick up this update: download the zip Claude gave you, then on your
+GitHub repo page use **Add file -> Upload files**, drag in everything
+from the zip (it'll ask to overwrite the existing files -- confirm), and
+commit. Render redeploys automatically within a minute or two.

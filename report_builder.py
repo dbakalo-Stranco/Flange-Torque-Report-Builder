@@ -15,9 +15,20 @@ This mirrors the cell mapping worked out by hand for Daniel Bakalo's crew:
   B24..B27 = the 4 breakout-load stages (25/50/75/100%)
   A31 (4-bolt sheet) or B31 (all others) = Torqued By
   F39/H39/K39 = Tool label / serial / cal date
-  A35 = free-text Comments (used for QC flags)
-  A57,G57,J57,A59,G59,J59 = signature-block cells, always cleared (blank
-                             for a wet signature, per standing instruction)
+  F32..K40 = "Tools Required" grid -- separate preprinted row per tool
+             capacity (32 TORQUE PUMP, 33 250LB CLICKER, 34 600LB CLICKER,
+             35 W2000, 36 W4000, 37 W8000, 38 S3000, 39 80LB CLICKER/B-RAD
+             JGUN, 40 open/custom row). The entry's tool_row picks which
+             row gets the serial/cal date; every other row is cleared so
+             no leftover template sample data bleeds through.
+  Comments (A35) are intentionally never written by this module -- QC
+             flags/overrides belong in a separate corrections log, not on
+             the report itself (standing instruction).
+  Stranco Rep block: A57 = Print Name, G57 = Signature (Michael Bakalo's
+             actual signature, embedded as an image), J57 = Date -- filled
+             in on every report per standing instruction, until told
+             otherwise. QA/QC Rep block (A59,G59,J59) is always left blank
+             for a wet signature.
 
 Sheet selection is by bolt count, matching the tab naming already baked
 into the template ('4 Bolt', '8 Bolt', '12 Bolt ' -- note trailing space,
@@ -34,8 +45,19 @@ from copy import copy
 
 import openpyxl
 from openpyxl.drawing.image import Image as XLImage
+from openpyxl.drawing.spreadsheet_drawing import OneCellAnchor, AnchorMarker
+from openpyxl.drawing.xdr import XDRPositiveSize2D
+from openpyxl.utils import column_index_from_string
 
 TEMPLATE_PATH = os.path.join(os.path.dirname(__file__), "template.xltx")
+
+# Standing rule (per Daniel, until told otherwise): auto-fill the Stranco
+# Rep block with this name + his actual signature image on every generated
+# report. The QA/QC Rep block is left blank (wet signature), unchanged.
+STRANCO_REP_NAME = "Michael Bakalo"
+SIGNATURE_IMAGE_PATH = os.path.join(os.path.dirname(__file__), "michael_bakalo_signature.png")
+SIGNATURE_IMAGE_WIDTH_PX = 150
+SIGNATURE_IMAGE_HEIGHT_PX = int(SIGNATURE_IMAGE_WIDTH_PX * 230 / 837)
 
 SHEET_BY_BOLTCOUNT = {
     4: "4 Bolt",
@@ -103,6 +125,32 @@ def _add_images(ws, imgs, boltcount):
         ws.add_image(img)
 
 
+def _add_signature_image(ws, cell_ref="G57", col_off_px=-6, row_off_px=-4):
+    """Drops Michael Bakalo's actual (scanned, background-removed) signature
+    into the Stranco Rep signature cell as an image."""
+    if not os.path.exists(SIGNATURE_IMAGE_PATH):
+        return
+    EMU_PER_PX = 9525
+    col_letter = "".join(ch for ch in cell_ref if ch.isalpha())
+    row_num = int("".join(ch for ch in cell_ref if ch.isdigit()))
+    col_idx = column_index_from_string(col_letter) - 1
+    row_idx = row_num - 1
+
+    img = XLImage(SIGNATURE_IMAGE_PATH)
+    img.width = SIGNATURE_IMAGE_WIDTH_PX
+    img.height = SIGNATURE_IMAGE_HEIGHT_PX
+    marker = AnchorMarker(
+        col=col_idx, colOff=col_off_px * EMU_PER_PX,
+        row=row_idx, rowOff=row_off_px * EMU_PER_PX,
+    )
+    size = XDRPositiveSize2D(
+        cx=SIGNATURE_IMAGE_WIDTH_PX * EMU_PER_PX,
+        cy=SIGNATURE_IMAGE_HEIGHT_PX * EMU_PER_PX,
+    )
+    img.anchor = OneCellAnchor(_from=marker, ext=size)
+    ws.add_image(img)
+
+
 def _bolt_od_value(ws, cell_ref, bolt_od):
     """Write bolt OD respecting whichever convention (numeric fraction vs
     literal text) the target sheet's F16 cell already uses."""
@@ -153,7 +201,8 @@ def build_workbook(entries, template_path=TEMPLATE_PATH):
     entries: list of dicts, each with:
       tab, pid, flange_no, tag, date, size, cls, bolt_od, boltcount,
       torqued_by, stages (4-tuple), tool_label, tool_serial, tool_cal,
-      system (default 'PH02'), comment (optional)
+      tool_row (default 39), system (default 'PH02'), comment (optional --
+      used only for the corrections log, never written to the report)
     Returns an openpyxl Workbook with one sheet per entry, master/example
     sheets removed.
     """
@@ -207,16 +256,32 @@ def build_workbook(entries, template_path=TEMPLATE_PATH):
             ws["A31"] = torqued_by
         else:
             ws["B31"] = torqued_by
-        ws["F39"] = e.get("tool_label", "OTHER")
-        ws["H39"] = e.get("tool_serial", "")
-        ws["K39"] = e.get("tool_cal", "")
-        comment = e.get("comment")
-        if comment:
-            ws["A35"] = comment
-        for c in ["A57", "G57", "J57", "A59", "G59", "J59"]:
+        # Tools Required grid: clear the whole grid first so no leftover
+        # template sample data bleeds through on a row this entry doesn't
+        # use, then write the tool's serial/cal date to its capacity row
+        # (see module docstring). Row 40's label is the only one ever
+        # overwritten (an open/custom row); every other row keeps its
+        # preprinted label.
+        for r in range(32, 41):
+            ws[f"H{r}"] = None
+            ws[f"K{r}"] = None
+        tool_row = e.get("tool_row", 39)
+        if tool_row == 40 and e.get("tool_label"):
+            ws[f"F{tool_row}"] = e["tool_label"]
+        ws[f"H{tool_row}"] = e.get("tool_serial", "")
+        ws[f"K{tool_row}"] = e.get("tool_cal", "")
+        # Comments (A35) intentionally left untouched -- QC flags go to the
+        # corrections log, never on the report itself.
+        # Stranco Rep block: auto-filled per standing rule.
+        ws["A57"] = STRANCO_REP_NAME
+        ws["G57"] = None
+        ws["J57"] = e.get("date", "")
+        # QA/QC Rep block: left blank for a wet signature.
+        for c in ["A59", "G59", "J59"]:
             ws[c] = None
 
         _add_images(ws, imgs, boltcount)
+        _add_signature_image(ws)
 
     for name in MASTER_SHEETS:
         if name in wb.sheetnames:
